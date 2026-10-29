@@ -7,11 +7,10 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
-    <!-- Bibliotecas do Firebase -->
+    <!-- Bibliotecas do Firebase (Apenas App, Auth e Database) -->
     <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-database-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-storage-compat.js"></script>
 
     <style>
         body { font-family: 'Inter', sans-serif; }
@@ -50,10 +49,14 @@
                 </button>
             </div>
             
-            <div id="upload-progress-container" class="hidden w-full mt-4 bg-slate-900 rounded-full h-1.5 border border-slate-700 overflow-hidden">
-                <div id="upload-progress-bar" class="bg-blue-500 h-1.5 rounded-full" style="width: 0%"></div>
+            <!-- Indicador de Processamento Simples -->
+            <div id="upload-progress-container" class="hidden w-full mt-4 flex items-center justify-center gap-2 text-blue-400">
+                <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p id="upload-status" class="text-xs font-medium">Processando e sincronizando imagem...</p>
             </div>
-            <p id="upload-status" class="hidden text-xs text-blue-400 mt-2 text-center font-medium">Enviando print...</p>
         </div>
 
         <!-- Lista de Clipes -->
@@ -83,7 +86,6 @@
         }
         const auth = firebase.auth();
         const db = firebase.database();
-        const storage = firebase.storage();
 
         const DEFAULT_EMAIL = "rochabatista@wilson.com";
         const DEFAULT_PASS = "wrzt01";
@@ -129,9 +131,6 @@
                         const item = data[key];
                         if (agora - item.timestamp > limiteExpiracao) {
                             itensParaDeletar[key] = null;
-                            if (item.tipo === 'imagem' && item.storagePath) {
-                                storage.ref(item.storagePath).delete().catch(e => console.log("Imagem apagada"));
-                            }
                         } else {
                             clipes.push({ id: key, ...item });
                         }
@@ -165,11 +164,10 @@
         function uploadImagem(event) {
             const file = event.target.files[0];
             if (!file) return;
-            processarUploadArquivo(file);
+            processarImagemBase64(file);
             event.target.value = '';
         }
 
-        // Interceptador de Colar adaptado para o teclado do iOS
         document.getElementById('input-texto').addEventListener('paste', (e) => {
             const clipboardData = e.clipboardData || window.clipboardData || (e.originalEvent && e.originalEvent.clipboardData);
             if (!clipboardData) return;
@@ -177,64 +175,86 @@
             const items = clipboardData.items;
             for (let i = 0; i < items.length; i++) {
                 if (items[i].kind === 'file' && items[i].type.includes('image/')) {
-                    e.preventDefault(); // Bloqueia a tentativa frustrada do textarea de colar imagem como texto
+                    e.preventDefault(); 
                     const file = items[i].getAsFile();
-                    processarUploadArquivo(file);
-                    return; // Interrompe o loop
+                    processarImagemBase64(file);
+                    return; 
                 }
             }
         });
 
-        function processarUploadArquivo(file) {
+        function processarImagemBase64(file) {
             if (!userId) return;
             
-            const progressBarContainer = document.getElementById('upload-progress-container');
-            const progressBar = document.getElementById('upload-progress-bar');
+            const progressContainer = document.getElementById('upload-progress-container');
             const statusText = document.getElementById('upload-status');
             
-            progressBarContainer.classList.remove('hidden');
-            statusText.classList.remove('hidden');
-            statusText.innerText = 'Enviando print...';
-            
-            const storagePath = `usuarios/${userId}/transfer/${Date.now()}_${file.name || 'print.jpg'}`;
-            const uploadTask = storage.ref(storagePath).put(file);
+            progressContainer.classList.remove('hidden');
+            progressContainer.classList.add('flex');
+            statusText.innerText = 'Processando e sincronizando imagem...';
 
-            uploadTask.on('state_changed', 
-                (snapshot) => {
-                    const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                    progressBar.style.width = progress + '%';
-                }, 
-                (error) => {
-                    alert('Erro detalhado no envio: ' + error.message);
-                    esconderProgresso();
-                }, 
-                () => {
-                    uploadTask.snapshot.ref.getDownloadURL().then((downloadURL) => {
-                        db.ref(`usuarios/${userId}/clip_sync`).push({
-                            tipo: 'imagem',
-                            conteudo: downloadURL,
-                            storagePath: storagePath,
-                            timestamp: Date.now()
-                        });
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    
+                    // Aumentado de 1200 para 2000 pixels para preservar qualidade e legibilidade de textos no print
+                    const MAX_WIDTH = 2000;
+                    const MAX_HEIGHT = 2000;
+                    let width = img.width;
+                    let height = img.height;
+
+                    if (width > height) {
+                        if (width > MAX_WIDTH) {
+                            height *= MAX_WIDTH / width;
+                            width = MAX_WIDTH;
+                        }
+                    } else {
+                        if (height > MAX_HEIGHT) {
+                            width *= MAX_HEIGHT / height;
+                            height = MAX_HEIGHT;
+                        }
+                    }
+
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    // Aumentado a qualidade de 0.6 (60%) para 0.95 (95%)
+                    const base64String = canvas.toDataURL('image/jpeg', 0.95);
+
+                    db.ref(`usuarios/${userId}/clip_sync`).push({
+                        tipo: 'imagem',
+                        conteudo: base64String,
+                        timestamp: Date.now()
+                    }).then(() => {
+                        esconderProgresso();
+                    }).catch(err => {
+                        alert('Erro ao enviar imagem: ' + err.message);
                         esconderProgresso();
                     });
-                }
-            );
+                };
+                img.src = event.target.result;
+            };
+            reader.onerror = function() {
+                alert('Erro ao ler a imagem colada.');
+                esconderProgresso();
+            };
+            reader.readAsDataURL(file);
         }
 
         function esconderProgresso() {
             setTimeout(() => {
-                document.getElementById('upload-progress-container').classList.add('hidden');
-                document.getElementById('upload-status').classList.add('hidden');
-                document.getElementById('upload-progress-bar').style.width = '0%';
+                const progressContainer = document.getElementById('upload-progress-container');
+                progressContainer.classList.add('hidden');
+                progressContainer.classList.remove('flex');
             }, 500);
         }
 
-        function apagarItem(id, tipo, storagePath) {
+        function apagarItem(id) {
             db.ref(`usuarios/${userId}/clip_sync/${id}`).remove();
-            if (tipo === 'imagem' && storagePath) {
-                storage.ref(storagePath).delete().catch(e => console.log(e));
-            }
         }
 
         function copiarItem(id) {
@@ -298,7 +318,7 @@
                             <div class="flex justify-between items-end mt-1">
                                 <span class="text-[10px] uppercase font-bold tracking-wider text-slate-500">${dataFormatada}</span>
                                 <div class="flex gap-2">
-                                    <button onclick="apagarItem('${item.id}', '${item.tipo}', null)" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/30 transition text-xs font-semibold">Apagar</button>
+                                    <button onclick="apagarItem('${item.id}')" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/30 transition text-xs font-semibold">Apagar</button>
                                     <button onclick="copiarItem('${item.id}')" class="px-5 py-1.5 rounded-lg bg-slate-200 hover:bg-white text-slate-900 font-bold transition text-xs shadow-sm">Copiar</button>
                                 </div>
                             </div>
@@ -307,13 +327,13 @@
                 } else if (item.tipo === 'imagem') {
                     return `
                         <div class="bg-slate-800 border border-slate-700 rounded-2xl p-3 shadow flex flex-col gap-3 transition hover:border-slate-600">
-                            <a href="${item.conteudo}" target="_blank" class="block w-full bg-slate-900 rounded-xl overflow-hidden border border-slate-700/50">
-                                <img src="${item.conteudo}" alt="Print salvo" class="w-full object-contain max-h-60 opacity-90 hover:opacity-100 transition">
-                            </a>
+                            <div class="block w-full bg-slate-900 rounded-xl overflow-hidden border border-slate-700/50 flex justify-center">
+                                <img src="${item.conteudo}" alt="Print salvo" class="w-auto object-contain max-h-64 opacity-95 hover:opacity-100 transition">
+                            </div>
                             <div class="flex justify-between items-end px-1">
                                 <span class="text-[10px] uppercase font-bold tracking-wider text-slate-500">${dataFormatada}</span>
                                 <div class="flex gap-2">
-                                    <button onclick="apagarItem('${item.id}', '${item.tipo}', '${item.storagePath}')" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/30 transition text-xs font-semibold">Apagar</button>
+                                    <button onclick="apagarItem('${item.id}')" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/30 transition text-xs font-semibold">Apagar</button>
                                 </div>
                             </div>
                         </div>
