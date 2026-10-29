@@ -7,7 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
-    <!-- Bibliotecas do Firebase (App, Auth, Database e Storage para Imagens) -->
+    <!-- Bibliotecas do Firebase -->
     <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-database-compat.js"></script>
@@ -47,7 +47,6 @@
             
             <div class="flex flex-col sm:flex-row gap-3 justify-between items-center">
                 <div class="flex gap-2 w-full sm:w-auto">
-                    <!-- Botão de Upload de Imagem -->
                     <label class="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 cursor-pointer rounded-xl text-sm font-semibold transition border border-slate-600">
                         <span>📸 Enviar Print</span>
                         <input type="file" id="input-imagem" accept="image/*" class="hidden" onchange="uploadImagem(event)">
@@ -59,7 +58,6 @@
                 </button>
             </div>
             
-            <!-- Barra de Progresso do Upload (Oculta por padrão) -->
             <div id="upload-progress-container" class="hidden w-full mt-4 bg-slate-900 rounded-full h-1.5 border border-slate-700 overflow-hidden">
                 <div id="upload-progress-bar" class="bg-blue-500 h-1.5 rounded-full" style="width: 0%"></div>
             </div>
@@ -68,7 +66,6 @@
 
         <!-- Lista de Clipes -->
         <div class="flex flex-col gap-4 pb-10" id="lista-clipes">
-            <!-- Injetado via JS -->
             <div class="text-center text-slate-500 text-sm py-10">Nenhum item na área de transferência.</div>
         </div>
     </main>
@@ -101,9 +98,8 @@
         
         let userId = null;
         let clipes = [];
-        const TEMPO_EXPIRACAO_DIAS = 7; // Itens expiram em 7 dias automaticamente
+        const TEMPO_EXPIRACAO_DIAS = 7;
 
-        // Login
         auth.signInWithEmailAndPassword(DEFAULT_EMAIL, DEFAULT_PASS).catch(err => {
             updateSyncStatus('error', 'Erro');
         });
@@ -127,7 +123,6 @@
             else dot.classList.add('bg-slate-500');
         }
 
-        // Listener Principal (e limpeza automática)
         function ouvirBaseDeDados() {
             updateSyncStatus('syncing', 'Sincronizando');
             db.ref(`usuarios/${userId}/clip_sync`).on('value', snapshot => {
@@ -140,12 +135,10 @@
                 if (data) {
                     Object.keys(data).forEach(key => {
                         const item = data[key];
-                        // Regra de expiração automática: Se passou de 7 dias, marca para deletar
                         if (agora - item.timestamp > limiteExpiracao) {
                             itensParaDeletar[key] = null;
                             if (item.tipo === 'imagem' && item.storagePath) {
-                                // Deleta a imagem fisicamente do Storage também
-                                storage.ref(item.storagePath).delete().catch(e => console.log("Imagem já apagada ou erro"));
+                                storage.ref(item.storagePath).delete().catch(e => console.log("Imagem já apagada"));
                             }
                         } else {
                             clipes.push({ id: key, ...item });
@@ -153,12 +146,11 @@
                     });
                 }
 
-                // Executa a limpeza silenciosa se houver itens velhos
                 if (Object.keys(itensParaDeletar).length > 0) {
                     db.ref(`usuarios/${userId}/clip_sync`).update(itensParaDeletar);
                 }
 
-                clipes.sort((a, b) => b.timestamp - a.timestamp); // Mais recentes primeiro
+                clipes.sort((a, b) => b.timestamp - a.timestamp);
                 renderizarClipes();
                 updateSyncStatus('synced', 'Ativo');
             });
@@ -178,15 +170,13 @@
             textarea.value = '';
         }
 
-        // Suporte a envio de imagens via botão
         function uploadImagem(event) {
             const file = event.target.files[0];
             if (!file) return;
             processarUploadArquivo(file);
-            event.target.value = ''; // reseta o input
+            event.target.value = '';
         }
 
-        // Suporte mágico para COLAR (Cmd+V) prints direto na tela (ótimo pro iPad)
         document.addEventListener('paste', (e) => {
             const items = (e.clipboardData || e.originalEvent.clipboardData).items;
             for (let index in items) {
@@ -260,19 +250,22 @@
             }
         }
 
-        function copiarTexto(texto) {
-            navigator.clipboard.writeText(texto).then(() => {
-                mostrarToast();
-            }).catch(err => {
-                // Fallback para iOS mais antigo
-                const textArea = document.createElement("textarea");
-                textArea.value = texto;
-                document.body.appendChild(textArea);
-                textArea.select();
-                document.execCommand("copy");
-                document.body.removeChild(textArea);
-                mostrarToast();
-            });
+        // Nova função blindada de cópia: busca direto no array pelo ID
+        function copiarItem(id) {
+            const item = clipes.find(c => c.id === id);
+            if (item && item.conteudo) {
+                navigator.clipboard.writeText(item.conteudo).then(() => {
+                    mostrarToast();
+                }).catch(err => {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = item.conteudo;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand("copy");
+                    document.body.removeChild(textArea);
+                    mostrarToast();
+                });
+            }
         }
 
         function mostrarToast() {
@@ -288,6 +281,17 @@
             return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
         }
 
+        // Função para converter HTML colado em texto seguro visualmente
+        function escapeHTML(str) {
+            return str.replace(/[&<>'"]/g, tag => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                "'": '&#39;',
+                '"': '&quot;'
+            }[tag] || tag));
+        }
+
         function renderizarClipes() {
             const container = document.getElementById('lista-clipes');
             
@@ -300,20 +304,20 @@
                 const dataFormatada = formatarData(item.timestamp);
                 
                 if (item.tipo === 'texto') {
-                    // Detecção simples de link para layout visual
-                    const ehLink = item.conteudo.startsWith('http://') || item.conteudo.startsWith('https://');
-                    const truncateText = item.conteudo.length > 200 ? item.conteudo.substring(0, 200) + '...' : item.conteudo;
+                    // Texto blindado contra renderização indevida
+                    const safeText = escapeHTML(item.conteudo);
                     
                     return `
                         <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex flex-col gap-3 transition hover:border-slate-600">
                             <div class="flex justify-between items-start gap-2">
-                                <p class="text-sm font-medium text-slate-200 whitespace-pre-wrap break-all">${truncateText}</p>
+                                <!-- Aplicado line-clamp-2 para forçar o texto a ficar em apenas duas linhas -->
+                                <p class="text-sm font-medium text-slate-200 line-clamp-2 break-all">${safeText}</p>
                             </div>
                             <div class="flex justify-between items-end mt-1">
                                 <span class="text-[10px] uppercase font-bold tracking-wider text-slate-500">${dataFormatada}</span>
                                 <div class="flex gap-2">
                                     <button onclick="apagarItem('${item.id}', '${item.tipo}', null)" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/30 transition text-xs font-semibold">Apagar</button>
-                                    <button onclick="copiarTexto(\`${item.conteudo.replace(/`/g, '\\`')}\`)" class="px-5 py-1.5 rounded-lg bg-slate-200 hover:bg-white text-slate-900 font-bold transition text-xs shadow-sm">Copiar</button>
+                                    <button onclick="copiarItem('${item.id}')" class="px-5 py-1.5 rounded-lg bg-slate-200 hover:bg-white text-slate-900 font-bold transition text-xs shadow-sm">Copiar</button>
                                 </div>
                             </div>
                         </div>
