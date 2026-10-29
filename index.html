@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Transferência Rápida</title>
+    <title>ClipSync</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
@@ -21,21 +21,13 @@
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col">
 
-    <!-- Header -->
-    <header class="bg-slate-800 border-b border-slate-700 px-4 sm:px-6 py-4 flex justify-between items-center shadow-md sticky top-0 z-10 backdrop-blur-md bg-slate-800/90">
-        <div class="flex items-center space-x-3">
-            <div class="bg-blue-600 p-2 rounded-lg text-white font-bold text-xl leading-none">🔗</div>
-            <div>
-                <h1 class="text-base sm:text-lg font-bold tracking-tight">ClipSync</h1>
-                <div class="flex items-center gap-1.5 mt-0.5">
-                    <p class="text-xs text-slate-400 font-medium" id="sync-text">Conectando...</p>
-                    <span id="sync-status" class="inline-block w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
-                </div>
-            </div>
+    <!-- Header Centralizado -->
+    <header class="bg-slate-800 border-b border-slate-700 px-4 py-4 flex flex-col items-center justify-center shadow-md sticky top-0 z-10 backdrop-blur-md bg-slate-800/90">
+        <h1 class="text-lg font-bold tracking-tight text-white">ClipSync</h1>
+        <div class="flex items-center gap-1.5 mt-0.5">
+            <p class="text-xs text-slate-400 font-medium" id="sync-text">Conectando...</p>
+            <span id="sync-status" class="inline-block w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
         </div>
-        <button onclick="limparTudo()" class="text-xs font-semibold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 px-3 py-1.5 rounded-lg transition border border-rose-500/30">
-            Limpar Tudo
-        </button>
     </header>
 
     <!-- Main Container -->
@@ -43,7 +35,7 @@
 
         <!-- Área de Entrada de Dados -->
         <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 sm:p-5 shadow-xl">
-            <textarea id="input-texto" rows="3" placeholder="Cole textos ou links aqui..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 text-slate-100 text-sm resize-none mb-3"></textarea>
+            <textarea id="input-texto" rows="3" placeholder="Cole textos, links ou prints aqui..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 text-slate-100 text-sm resize-none mb-3"></textarea>
             
             <div class="flex flex-col sm:flex-row gap-3 justify-between items-center">
                 <div class="flex gap-2 w-full sm:w-auto">
@@ -138,7 +130,7 @@
                         if (agora - item.timestamp > limiteExpiracao) {
                             itensParaDeletar[key] = null;
                             if (item.tipo === 'imagem' && item.storagePath) {
-                                storage.ref(item.storagePath).delete().catch(e => console.log("Imagem já apagada"));
+                                storage.ref(item.storagePath).delete().catch(e => console.log("Imagem apagada"));
                             }
                         } else {
                             clipes.push({ id: key, ...item });
@@ -177,13 +169,18 @@
             event.target.value = '';
         }
 
-        document.addEventListener('paste', (e) => {
-            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
-            for (let index in items) {
-                const item = items[index];
-                if (item.kind === 'file' && item.type.includes('image/')) {
-                    const file = item.getAsFile();
+        // Interceptador de Colar adaptado para o teclado do iOS
+        document.getElementById('input-texto').addEventListener('paste', (e) => {
+            const clipboardData = e.clipboardData || window.clipboardData || (e.originalEvent && e.originalEvent.clipboardData);
+            if (!clipboardData) return;
+
+            const items = clipboardData.items;
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].kind === 'file' && items[i].type.includes('image/')) {
+                    e.preventDefault(); // Bloqueia a tentativa frustrada do textarea de colar imagem como texto
+                    const file = items[i].getAsFile();
                     processarUploadArquivo(file);
+                    return; // Interrompe o loop
                 }
             }
         });
@@ -197,8 +194,9 @@
             
             progressBarContainer.classList.remove('hidden');
             statusText.classList.remove('hidden');
+            statusText.innerText = 'Enviando print...';
             
-            const storagePath = `usuarios/${userId}/transfer/${Date.now()}_${file.name || 'print.png'}`;
+            const storagePath = `usuarios/${userId}/transfer/${Date.now()}_${file.name || 'print.jpg'}`;
             const uploadTask = storage.ref(storagePath).put(file);
 
             uploadTask.on('state_changed', 
@@ -207,7 +205,7 @@
                     progressBar.style.width = progress + '%';
                 }, 
                 (error) => {
-                    alert('Erro ao enviar imagem.');
+                    alert('Erro detalhado no envio: ' + error.message);
                     esconderProgresso();
                 }, 
                 () => {
@@ -239,18 +237,6 @@
             }
         }
 
-        function limparTudo() {
-            if (confirm("Apagar toda a área de transferência agora?")) {
-                clipes.forEach(c => {
-                    if (c.tipo === 'imagem' && c.storagePath) {
-                        storage.ref(c.storagePath).delete().catch(e => {});
-                    }
-                });
-                db.ref(`usuarios/${userId}/clip_sync`).remove();
-            }
-        }
-
-        // Nova função blindada de cópia: busca direto no array pelo ID
         function copiarItem(id) {
             const item = clipes.find(c => c.id === id);
             if (item && item.conteudo) {
@@ -281,7 +267,6 @@
             return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
         }
 
-        // Função para converter HTML colado em texto seguro visualmente
         function escapeHTML(str) {
             return str.replace(/[&<>'"]/g, tag => ({
                 '&': '&amp;',
@@ -304,13 +289,10 @@
                 const dataFormatada = formatarData(item.timestamp);
                 
                 if (item.tipo === 'texto') {
-                    // Texto blindado contra renderização indevida
                     const safeText = escapeHTML(item.conteudo);
-                    
                     return `
                         <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex flex-col gap-3 transition hover:border-slate-600">
                             <div class="flex justify-between items-start gap-2">
-                                <!-- Aplicado line-clamp-2 para forçar o texto a ficar em apenas duas linhas -->
                                 <p class="text-sm font-medium text-slate-200 line-clamp-2 break-all">${safeText}</p>
                             </div>
                             <div class="flex justify-between items-end mt-1">
