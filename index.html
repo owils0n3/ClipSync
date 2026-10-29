@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Transferência Rápida</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Bibliotecas do Firebase (App, Auth, Database e Storage para Imagens) -->
+    <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-storage-compat.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="bg-slate-800 border-b border-slate-700 px-4 sm:px-6 py-4 flex justify-between items-center shadow-md sticky top-0 z-10 backdrop-blur-md bg-slate-800/90">
+        <div class="flex items-center space-x-3">
+            <div class="bg-blue-600 p-2 rounded-lg text-white font-bold text-xl leading-none">🔗</div>
+            <div>
+                <h1 class="text-base sm:text-lg font-bold tracking-tight">ClipSync</h1>
+                <div class="flex items-center gap-1.5 mt-0.5">
+                    <p class="text-xs text-slate-400 font-medium" id="sync-text">Conectando...</p>
+                    <span id="sync-status" class="inline-block w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+                </div>
+            </div>
+        </div>
+        <button onclick="limparTudo()" class="text-xs font-semibold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 px-3 py-1.5 rounded-lg transition border border-rose-500/30">
+            Limpar Tudo
+        </button>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 max-w-3xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-6">
+
+        <!-- Área de Entrada de Dados -->
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 sm:p-5 shadow-xl">
+            <textarea id="input-texto" rows="3" placeholder="Cole textos ou links aqui..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 text-slate-100 text-sm resize-none mb-3"></textarea>
+            
+            <div class="flex flex-col sm:flex-row gap-3 justify-between items-center">
+                <div class="flex gap-2 w-full sm:w-auto">
+                    <!-- Botão de Upload de Imagem -->
+                    <label class="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 cursor-pointer rounded-xl text-sm font-semibold transition border border-slate-600">
+                        <span>📸 Enviar Print</span>
+                        <input type="file" id="input-imagem" accept="image/*" class="hidden" onchange="uploadImagem(event)">
+                    </label>
+                </div>
+                
+                <button onclick="enviarTexto()" class="w-full sm:w-auto px-6 py-2.5 bg-blue-600 hover:bg-blue-500 rounded-xl text-sm font-bold shadow-lg transition text-white">
+                    Enviar Texto
+                </button>
+            </div>
+            
+            <!-- Barra de Progresso do Upload (Oculta por padrão) -->
+            <div id="upload-progress-container" class="hidden w-full mt-4 bg-slate-900 rounded-full h-1.5 border border-slate-700 overflow-hidden">
+                <div id="upload-progress-bar" class="bg-blue-500 h-1.5 rounded-full" style="width: 0%"></div>
+            </div>
+            <p id="upload-status" class="hidden text-xs text-blue-400 mt-2 text-center font-medium">Enviando print...</p>
+        </div>
+
+        <!-- Lista de Clipes -->
+        <div class="flex flex-col gap-4 pb-10" id="lista-clipes">
+            <!-- Injetado via JS -->
+            <div class="text-center text-slate-500 text-sm py-10">Nenhum item na área de transferência.</div>
+        </div>
+    </main>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-slate-100 text-slate-900 px-5 py-2.5 rounded-full text-sm font-bold shadow-xl transition-all duration-300 translate-y-20 opacity-0 z-50 pointer-events-none">
+        Copiado!
+    </div>
+
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyD7vdvBDk6k48AlRDQpdrhOxG212MovmrM",
+            authDomain: "rocha-batista.firebaseapp.com",
+            databaseURL: "https://rocha-batista-default-rtdb.firebaseio.com",
+            projectId: "rocha-batista",
+            storageBucket: "rocha-batista.firebasestorage.app",
+            messagingSenderId: "737568409775",
+            appId: "1:737568409775:web:41b6eefa0b18199886ac5a"
+        };
+
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.database();
+        const storage = firebase.storage();
+
+        const DEFAULT_EMAIL = "rochabatista@wilson.com";
+        const DEFAULT_PASS = "wrzt01";
+        
+        let userId = null;
+        let clipes = [];
+        const TEMPO_EXPIRACAO_DIAS = 7; // Itens expiram em 7 dias automaticamente
+
+        // Login
+        auth.signInWithEmailAndPassword(DEFAULT_EMAIL, DEFAULT_PASS).catch(err => {
+            updateSyncStatus('error', 'Erro');
+        });
+
+        auth.onAuthStateChanged(user => {
+            if (user) {
+                userId = user.uid;
+                ouvirBaseDeDados();
+            }
+        });
+
+        function updateSyncStatus(status, text) {
+            const dot = document.getElementById('sync-status');
+            const txt = document.getElementById('sync-text');
+            txt.innerText = text;
+            dot.className = "inline-block w-2.5 h-2.5 rounded-full";
+            
+            if (status === 'synced') dot.classList.add('bg-emerald-500');
+            else if (status === 'syncing') dot.classList.add('bg-amber-500', 'animate-pulse');
+            else if (status === 'error') dot.classList.add('bg-rose-500');
+            else dot.classList.add('bg-slate-500');
+        }
+
+        // Listener Principal (e limpeza automática)
+        function ouvirBaseDeDados() {
+            updateSyncStatus('syncing', 'Sincronizando');
+            db.ref(`usuarios/${userId}/clip_sync`).on('value', snapshot => {
+                const data = snapshot.val();
+                clipes = [];
+                let itensParaDeletar = {};
+                const agora = Date.now();
+                const limiteExpiracao = TEMPO_EXPIRACAO_DIAS * 24 * 60 * 60 * 1000;
+
+                if (data) {
+                    Object.keys(data).forEach(key => {
+                        const item = data[key];
+                        // Regra de expiração automática: Se passou de 7 dias, marca para deletar
+                        if (agora - item.timestamp > limiteExpiracao) {
+                            itensParaDeletar[key] = null;
+                            if (item.tipo === 'imagem' && item.storagePath) {
+                                // Deleta a imagem fisicamente do Storage também
+                                storage.ref(item.storagePath).delete().catch(e => console.log("Imagem já apagada ou erro"));
+                            }
+                        } else {
+                            clipes.push({ id: key, ...item });
+                        }
+                    });
+                }
+
+                // Executa a limpeza silenciosa se houver itens velhos
+                if (Object.keys(itensParaDeletar).length > 0) {
+                    db.ref(`usuarios/${userId}/clip_sync`).update(itensParaDeletar);
+                }
+
+                clipes.sort((a, b) => b.timestamp - a.timestamp); // Mais recentes primeiro
+                renderizarClipes();
+                updateSyncStatus('synced', 'Ativo');
+            });
+        }
+
+        function enviarTexto() {
+            const textarea = document.getElementById('input-texto');
+            const texto = textarea.value.trim();
+            if (!texto || !userId) return;
+
+            db.ref(`usuarios/${userId}/clip_sync`).push({
+                tipo: 'texto',
+                conteudo: texto,
+                timestamp: Date.now()
+            });
+
+            textarea.value = '';
+        }
+
+        // Suporte a envio de imagens via botão
+        function uploadImagem(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            processarUploadArquivo(file);
+            event.target.value = ''; // reseta o input
+        }
+
+        // Suporte mágico para COLAR (Cmd+V) prints direto na tela (ótimo pro iPad)
+        document.addEventListener('paste', (e) => {
+            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            for (let index in items) {
+                const item = items[index];
+                if (item.kind === 'file' && item.type.includes('image/')) {
+                    const file = item.getAsFile();
+                    processarUploadArquivo(file);
+                }
+            }
+        });
+
+        function processarUploadArquivo(file) {
+            if (!userId) return;
+            
+            const progressBarContainer = document.getElementById('upload-progress-container');
+            const progressBar = document.getElementById('upload-progress-bar');
+            const statusText = document.getElementById('upload-status');
+            
+            progressBarContainer.classList.remove('hidden');
+            statusText.classList.remove('hidden');
+            
+            const storagePath = `usuarios/${userId}/transfer/${Date.now()}_${file.name || 'print.png'}`;
+            const uploadTask = storage.ref(storagePath).put(file);
+
+            uploadTask.on('state_changed', 
+                (snapshot) => {
+                    const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                    progressBar.style.width = progress + '%';
+                }, 
+                (error) => {
+                    alert('Erro ao enviar imagem.');
+                    esconderProgresso();
+                }, 
+                () => {
+                    uploadTask.snapshot.ref.getDownloadURL().then((downloadURL) => {
+                        db.ref(`usuarios/${userId}/clip_sync`).push({
+                            tipo: 'imagem',
+                            conteudo: downloadURL,
+                            storagePath: storagePath,
+                            timestamp: Date.now()
+                        });
+                        esconderProgresso();
+                    });
+                }
+            );
+        }
+
+        function esconderProgresso() {
+            setTimeout(() => {
+                document.getElementById('upload-progress-container').classList.add('hidden');
+                document.getElementById('upload-status').classList.add('hidden');
+                document.getElementById('upload-progress-bar').style.width = '0%';
+            }, 500);
+        }
+
+        function apagarItem(id, tipo, storagePath) {
+            db.ref(`usuarios/${userId}/clip_sync/${id}`).remove();
+            if (tipo === 'imagem' && storagePath) {
+                storage.ref(storagePath).delete().catch(e => console.log(e));
+            }
+        }
+
+        function limparTudo() {
+            if (confirm("Apagar toda a área de transferência agora?")) {
+                clipes.forEach(c => {
+                    if (c.tipo === 'imagem' && c.storagePath) {
+                        storage.ref(c.storagePath).delete().catch(e => {});
+                    }
+                });
+                db.ref(`usuarios/${userId}/clip_sync`).remove();
+            }
+        }
+
+        function copiarTexto(texto) {
+            navigator.clipboard.writeText(texto).then(() => {
+                mostrarToast();
+            }).catch(err => {
+                // Fallback para iOS mais antigo
+                const textArea = document.createElement("textarea");
+                textArea.value = texto;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand("copy");
+                document.body.removeChild(textArea);
+                mostrarToast();
+            });
+        }
+
+        function mostrarToast() {
+            const toast = document.getElementById('toast');
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 2000);
+        }
+
+        function formatarData(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+        }
+
+        function renderizarClipes() {
+            const container = document.getElementById('lista-clipes');
+            
+            if (clipes.length === 0) {
+                container.innerHTML = `<div class="text-center text-slate-500 text-sm py-10">Nenhum item na área de transferência.</div>`;
+                return;
+            }
+
+            container.innerHTML = clipes.map(item => {
+                const dataFormatada = formatarData(item.timestamp);
+                
+                if (item.tipo === 'texto') {
+                    // Detecção simples de link para layout visual
+                    const ehLink = item.conteudo.startsWith('http://') || item.conteudo.startsWith('https://');
+                    const truncateText = item.conteudo.length > 200 ? item.conteudo.substring(0, 200) + '...' : item.conteudo;
+                    
+                    return `
+                        <div class="bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow flex flex-col gap-3 transition hover:border-slate-600">
+                            <div class="flex justify-between items-start gap-2">
+                                <p class="text-sm font-medium text-slate-200 whitespace-pre-wrap break-all">${truncateText}</p>
+                            </div>
+                            <div class="flex justify-between items-end mt-1">
+                                <span class="text-[10px] uppercase font-bold tracking-wider text-slate-500">${dataFormatada}</span>
+                                <div class="flex gap-2">
+                                    <button onclick="apagarItem('${item.id}', '${item.tipo}', null)" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/30 transition text-xs font-semibold">Apagar</button>
+                                    <button onclick="copiarTexto(\`${item.conteudo.replace(/`/g, '\\`')}\`)" class="px-5 py-1.5 rounded-lg bg-slate-200 hover:bg-white text-slate-900 font-bold transition text-xs shadow-sm">Copiar</button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else if (item.tipo === 'imagem') {
+                    return `
+                        <div class="bg-slate-800 border border-slate-700 rounded-2xl p-3 shadow flex flex-col gap-3 transition hover:border-slate-600">
+                            <a href="${item.conteudo}" target="_blank" class="block w-full bg-slate-900 rounded-xl overflow-hidden border border-slate-700/50">
+                                <img src="${item.conteudo}" alt="Print salvo" class="w-full object-contain max-h-60 opacity-90 hover:opacity-100 transition">
+                            </a>
+                            <div class="flex justify-between items-end px-1">
+                                <span class="text-[10px] uppercase font-bold tracking-wider text-slate-500">${dataFormatada}</span>
+                                <div class="flex gap-2">
+                                    <button onclick="apagarItem('${item.id}', '${item.tipo}', '${item.storagePath}')" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/30 transition text-xs font-semibold">Apagar</button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+            }).join('');
+        }
+    </script>
+</body>
+</html>
