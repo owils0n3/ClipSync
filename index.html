@@ -199,7 +199,6 @@
                 img.onload = function() {
                     const canvas = document.createElement('canvas');
                     
-                    // Aumentado de 1200 para 2000 pixels para preservar qualidade e legibilidade de textos no print
                     const MAX_WIDTH = 2000;
                     const MAX_HEIGHT = 2000;
                     let width = img.width;
@@ -222,7 +221,6 @@
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
 
-                    // Aumentado a qualidade de 0.6 (60%) para 0.95 (95%)
                     const base64String = canvas.toDataURL('image/jpeg', 0.95);
 
                     db.ref(`usuarios/${userId}/clip_sync`).push({
@@ -257,9 +255,12 @@
             db.ref(`usuarios/${userId}/clip_sync/${id}`).remove();
         }
 
-        function copiarItem(id) {
+        // Função de copiar inteligente: Trata texto e imagem
+        async function copiarItem(id) {
             const item = clipes.find(c => c.id === id);
-            if (item && item.conteudo) {
+            if (!item || !item.conteudo) return;
+
+            if (item.tipo === 'texto') {
                 navigator.clipboard.writeText(item.conteudo).then(() => {
                     mostrarToast();
                 }).catch(err => {
@@ -271,6 +272,19 @@
                     document.body.removeChild(textArea);
                     mostrarToast();
                 });
+            } else if (item.tipo === 'imagem') {
+                try {
+                    const response = await fetch(item.conteudo);
+                    const blob = await response.blob();
+                    await navigator.clipboard.write([
+                        new ClipboardItem({
+                            [blob.type]: blob
+                        })
+                    ]);
+                    mostrarToast();
+                } catch (err) {
+                    alert('Erro ao copiar imagem pelo botão. Por favor, segure na imagem e selecione "Copiar".');
+                }
             }
         }
 
@@ -334,6 +348,7 @@
                                 <span class="text-[10px] uppercase font-bold tracking-wider text-slate-500">${dataFormatada}</span>
                                 <div class="flex gap-2">
                                     <button onclick="apagarItem('${item.id}')" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 hover:text-rose-400 hover:border-rose-500/30 transition text-xs font-semibold">Apagar</button>
+                                    <button onclick="copiarItem('${item.id}')" class="px-5 py-1.5 rounded-lg bg-slate-200 hover:bg-white text-slate-900 font-bold transition text-xs shadow-sm">Copiar</button>
                                 </div>
                             </div>
                         </div>
