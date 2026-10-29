@@ -7,7 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
-    <!-- Bibliotecas do Firebase (Apenas App, Auth e Database) -->
+    <!-- Bibliotecas do Firebase -->
     <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-database-compat.js"></script>
@@ -55,7 +55,7 @@
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                <p id="upload-status" class="text-xs font-medium">Processando e sincronizando imagem...</p>
+                <p id="upload-status" class="text-xs font-medium">Processando e sincronizando...</p>
             </div>
         </div>
 
@@ -164,7 +164,7 @@
         function uploadImagem(event) {
             const file = event.target.files[0];
             if (!file) return;
-            processarImagemBase64(file);
+            processarImagemParaNuvem(file);
             event.target.value = '';
         }
 
@@ -177,13 +177,14 @@
                 if (items[i].kind === 'file' && items[i].type.includes('image/')) {
                     e.preventDefault(); 
                     const file = items[i].getAsFile();
-                    processarImagemBase64(file);
+                    processarImagemParaNuvem(file);
                     return; 
                 }
             }
         });
 
-        function processarImagemBase64(file) {
+        // Modificado para PNG para compatibilidade com o Clipboard do iOS
+        function processarImagemParaNuvem(file) {
             if (!userId) return;
             
             const progressContainer = document.getElementById('upload-progress-container');
@@ -191,7 +192,7 @@
             
             progressContainer.classList.remove('hidden');
             progressContainer.classList.add('flex');
-            statusText.innerText = 'Processando e sincronizando imagem...';
+            statusText.innerText = 'Processando print...';
 
             const reader = new FileReader();
             reader.onload = function(event) {
@@ -199,8 +200,9 @@
                 img.onload = function() {
                     const canvas = document.createElement('canvas');
                     
-                    const MAX_WIDTH = 2000;
-                    const MAX_HEIGHT = 2000;
+                    // Dimensão segura para PNG no RTDB
+                    const MAX_WIDTH = 1500;
+                    const MAX_HEIGHT = 1500;
                     let width = img.width;
                     let height = img.height;
 
@@ -221,7 +223,8 @@
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
 
-                    const base64String = canvas.toDataURL('image/jpeg', 0.95);
+                    // SALVANDO COMO PNG: Exigência do iOS para permitir a cópia
+                    const base64String = canvas.toDataURL('image/png');
 
                     db.ref(`usuarios/${userId}/clip_sync`).push({
                         tipo: 'imagem',
@@ -255,8 +258,8 @@
             db.ref(`usuarios/${userId}/clip_sync/${id}`).remove();
         }
 
-        // Função de copiar inteligente: Trata texto e imagem
-        async function copiarItem(id) {
+        // Nova função inteligente de cópia (Trata Texto e Injeta PNG binário síncrono)
+        function copiarItem(id) {
             const item = clipes.find(c => c.id === id);
             if (!item || !item.conteudo) return;
 
@@ -274,16 +277,39 @@
                 });
             } else if (item.tipo === 'imagem') {
                 try {
-                    const response = await fetch(item.conteudo);
-                    const blob = await response.blob();
-                    await navigator.clipboard.write([
+                    const partes = item.conteudo.split(',');
+                    const mimeType = partes[0].match(/:(.*?);/)[1];
+                    
+                    // Bloqueio de segurança se houver print antigo em JPEG salvo no cache
+                    if(mimeType !== 'image/png') {
+                        alert("Este print antigo não pode ser copiado pelo botão. Segure na imagem para copiar. Os novos já funcionarão normalmente!");
+                        return;
+                    }
+
+                    // Transforma o Base64 em Blob de forma síncrona
+                    const b64Data = partes[1];
+                    const byteCharacters = atob(b64Data);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const blob = new Blob([byteArray], {type: mimeType});
+
+                    // Comando nativo para injetar no iOS
+                    navigator.clipboard.write([
                         new ClipboardItem({
-                            [blob.type]: blob
+                            [mimeType]: blob
                         })
-                    ]);
-                    mostrarToast();
+                    ]).then(() => {
+                        mostrarToast();
+                    }).catch(err => {
+                        console.error(err);
+                        alert("Ocorreu uma restrição do navegador. Segure na imagem e use 'Copiar'.");
+                    });
+
                 } catch (err) {
-                    alert('Erro ao copiar imagem pelo botão. Por favor, segure na imagem e selecione "Copiar".');
+                    console.error("Erro na conversão:", err);
                 }
             }
         }
